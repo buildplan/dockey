@@ -566,7 +566,7 @@ check_network() {
             local interface data_part errors packets
             interface=$(echo "$line" | awk -F ':' '{print $1}' | sed 's/^[ \t]*//;s/[ \t]*$//')
             data_part=$(echo "$line" | cut -d':' -f2-)
-            read -r _r_bytes _r_packets _r_errs _r_drop _ _ _ _ _ _t_bytes _t_packets _t_errs _t_drop <<< "$data_part"
+            read -r _r_bytes _r_packets _r_errs _r_drop _ _ _ _ _t_bytes _t_packets _t_errs _t_drop <<< "$data_part"
             if ! [[ "$_r_errs" =~ ^[0-9]+$ && "$_t_drop" =~ ^[0-9]+$ ]]; then continue; fi
             errors=$((_r_errs + _t_drop))
             if [ "$errors" -gt "$NETWORK_ERROR_THRESHOLD" ]; then
@@ -888,10 +888,9 @@ perform_checks_for_container() {
     fi
 }
 
-# --- (Add this entire function to your script) ---
-
-# NEW FUNCTION: Run all checks and output as JSON
 run_json_output() {
+    set -e # Exit immediately if a command exits with a non-zero status.
+
     local containers_to_check_json=()
     if [ "$#" -gt 0 ]; then
         containers_to_check_json=("$@")
@@ -938,7 +937,7 @@ run_json_output() {
 
         # Update Check (using your existing function)
         local update_check_output
-        update_check_output=$(check_for_updates "$name" "$image" 2>/dev/null)
+        update_check_output=$(check_for_updates "$name" "$image")
         local update_available="false"
         local update_details=""
         if [ -n "$update_check_output" ]; then
@@ -1186,7 +1185,7 @@ main() {
             local summary_message=""
             for container in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
                 local issues=${CONTAINER_ISSUES_MAP["$container"]}
-		summary_message+="\n[$container]\n- $issues\n"
+		summary_message+="\n[$container]\n- $issues\\n"
             done
             summary_message=$(echo -e "$summary_message" | sed 's/^[[:space:]]*//')
 
