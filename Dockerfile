@@ -1,41 +1,27 @@
-# Dockerfile for Dockey - The Docker Monitoring Web UI
-
-# --- Build Stage ---
-FROM python:3.11-slim AS builder
+FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install build dependencies
+# Install dependencies
 RUN apt-get update && \
-    apt-get install -y curl build-essential && \
-    curl https://sh.rustup.rs -sSf | sh -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
+    apt-get install -y --no-install-recommends jq docker-cli && \
+    rm -rf /var/lib/apt/lists/*
 
-# Copy the requirements file into the container
+# Copy the requirements file for the Python app
 COPY requirements.txt .
 
 # Install the Python dependencies
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
 RUN pip install --no-cache-dir -r requirements.txt
 
-# --- Final Stage ---
-FROM python:3.11-slim
-
-# Set the working directory
-WORKDIR /app
-
-# Copy the virtual environment from the builder stage
-COPY --from=builder /opt/venv /opt/venv
+# Copy the shell script into the image and make it executable
+COPY container-monitor.sh /usr/local/bin/container-monitor
+RUN chmod +x /usr/local/bin/container-monitor
 
 # Copy the application code (backend and frontend) into the container
 COPY ./main.py .
 COPY ./static ./static
 
-# Using the Python from our virtual environment
-ENV PATH="/opt/venv/bin:$PATH"
-
-# Expose the port the app runs on
+# Expose the port the app runs ong
 EXPOSE 8000
 
 # Define the command to run the application

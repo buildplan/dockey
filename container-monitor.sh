@@ -1,49 +1,5 @@
 #!/bin/bash
 
-# Description:
-# This script monitors Docker containers on the system.
-# It checks container status, resource usage (CPU, Memory, Disk, Network),
-# checks for image updates, checks container logs for errors/warnings,
-# and monitors container restarts.
-# Output is printed to the standard output with improved formatting and colors and logged to a file.
-#
-# Configuration:
-#   Configuration is primarily done via config.sh and environment variables.
-#   Environment variables override settings in config.sh.
-#   Script defaults are used if no other configuration is found.
-#
-# Environment Variables (can be set to customize script behavior):
-#   - LOG_LINES_TO_CHECK: Number of log lines to check.
-#   - CHECK_FREQUENCY_MINUTES: Frequency of checks in minutes (Note: Script is run by external scheduler).
-#   - LOG_FILE: Path to the log file.
-#   - CONTAINER_NAMES: Comma-separated list of container names to monitor. Overrides config.sh.
-#   - CPU_WARNING_THRESHOLD: CPU usage percentage threshold for warnings.
-#   - MEMORY_WARNING_THRESHOLD: Memory usage percentage threshold for warnings.
-#   - DISK_SPACE_THRESHOLD: Disk space usage percentage threshold for warnings (for container mounts).
-#   - NETWORK_ERROR_THRESHOLD: Network error/drop count threshold for warnings.
-#   - HOST_DISK_CHECK_FILESYSTEM: Filesystem path on host to check for disk usage (e.g., "/", "/var/lib/docker"). Default: "/".
-#
-# Usage:
-#   ./docker-container-monitor.sh                           	- Monitor based on config (or all running)
-#   ./container-monitor.sh --interactive-update      		- Interactively choose which containers to update.
-#   ./container-monitor.sh --exclude=c1,c2           		- Run on all containers, excluding specific ones.
-#   ./docker-container-monitor.sh summary                   	- Run all checks silently and show only the final summary.
-#   ./docker-container-monitor.sh summary <c1> <c2> ...     	- Summary mode for specific containers.
-#   ./docker-container-monitor.sh <container1> <container2> ... - Monitor specific containers (full output)
-#   ./docker-container-monitor.sh logs                      	- Show logs for all running containers
-#   ./docker-container-monitor.sh logs <container_name>     	- Show logs for a specific container
-#   ./docker-container-monitor.sh logs errors <container_name> 	- Show errors in logs for a specific container
-#   ./docker-container-monitor.sh save logs <container_name> 	- Save logs for a specific container to a file
-#   ./container-monitor.sh --no-update        			- Run without checking for a script update.
-#
-# Prerequisites:
-#   - Docker
-#   - jq (for processing JSON output from docker inspect and docker stats)
-#   - yq (for yaml config file)
-#   - skopeo (for checking for container image updates)
-#   - bc or awk (awk is used in this script for float comparisons to reduce dependencies)
-#   - timeout (from coreutils, for docker exec commands)
-
 # --- Script & Update Configuration ---
 VERSION="v0.21"
 VERSION_DATE="2025-07-16"
@@ -932,8 +888,94 @@ perform_checks_for_container() {
     fi
 }
 
+# --- (Add this entire function to your script) ---
+
+# NEW FUNCTION: Run all checks and output as JSON
+run_json_output() {
+    local containers_to_check_json=()
+    if [ "$#" -gt 0 ]; then
+        containers_to_check_json=("$@")
+    else
+        # Get all containers, not just running ones, for a complete picture
+        mapfile -t containers_to_check_json < <(docker ps -a --format '{{.Names}}')
+    fi
+
+    local json_output="["
+    local first_container=true
+
+    for container_name in "${containers_to_check_json[@]}"; do
+        if [ "$first_container" = false ]; then
+            json_output+=","
+        fi
+        first_container=false
+
+        local inspect_json
+        inspect_json=$(docker inspect "$container_name" 2>/dev/null)
+        if [ -z "$inspect_json" ]; then
+            continue
+        fi
+
+        # Extract data using jq and shell commands
+        local name; name=$(jq -r '.[0].Name' <<< "$inspect_json" | sed 's|^/||')
+        local id; id=$(jq -r '.[0].Id' <<< "$inspect_json" | cut -c1-12)
+        local image; image=$(jq -r '.[0].Config.Image' <<< "$inspect_json")
+        local status; status=$(jq -r '.[0].State.Status' <<< "$inspect_json")
+        local health="n/a"
+        if jq -e '.[0].State.Health.Status != null' <<< "$inspect_json" >/dev/null 2>&1; then
+            health=$(jq -r '.[0].State.Health.Status' <<< "$inspect_json")
+        fi
+        local restarts; restarts=$(jq -r '.[0].RestartCount' <<< "$inspect_json")
+
+        # Resource Usage - only for running containers
+        local cpu="0"; local mem="0"
+        if [[ "$status" == "running" ]]; then
+            local stats_json; stats_json=$(docker stats --no-stream --format '{{json .}}' "$container_name" 2>/dev/null)
+            if [ -n "$stats_json" ]; then
+                cpu=$(jq -r '.CPUPerc' <<< "$stats_json" | tr -d '%')
+                mem=$(jq -r '.MemPerc' <<< "$stats_json" | tr -d '%')
+            fi
+        fi
+
+        # Update Check (using your existing function)
+        local update_check_output
+        update_check_output=$(check_for_updates "$name" "$image" 2>/dev/null)
+        local update_available="false"
+        local update_details=""
+        if [ -n "$update_check_output" ]; then
+            update_available="true"
+            # Sanitize for JSON: escape quotes and newlines
+            update_details=$(echo "$update_check_output" | head -n 1 | sed 's/"/\\"/g' | tr -d '\n\r')
+        fi
+
+        # Build JSON object for the container
+        json_output+=$(jq -n \
+            --arg name "$name" \
+            --arg id "$id" \
+            --arg image "$image" \
+            --arg status "$status" \
+            --arg health "$health" \
+            --arg restarts "$restarts" \
+            --arg cpu "$cpu" \
+            --arg mem "$mem" \
+            --argjson update_available "$update_available" \
+            --arg update_details "$update_details" \
+            '{name: $name, id: $id, image: $image, status: $status, health: $health, restarts: $restarts, cpu: $cpu, mem: $mem, update_available: $update_available, update_details: $update_details}')
+    done
+
+    json_output+="]"
+    echo "$json_output"
+}
+
 # --- Main Execution ---
 main() {
+
+    # New: Handle 'json' command
+    if [[ "$1" == "json" ]]; then
+        shift
+        run_json_output "$@"
+        exit 0
+    fi
+
     # 1. Check for and offer to install any missing dependencies
     check_and_install_dependencies
 

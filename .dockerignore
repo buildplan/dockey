@@ -27,7 +27,3 @@ __pycache__/
 
 # Log files
 *.log
-
-# Original script files
-container-monitor.sh
-config.yml
