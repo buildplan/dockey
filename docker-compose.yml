@@ -1,0 +1,25 @@
+# docker-compose.yml - For easy local development and deployment of Dockey
+
+version: '3.8'
+
+services:
+  dockey:
+    # This tells Docker Compose to build the image from the Dockerfile
+    # in the current directory.
+    build: .
+    container_name: dockey
+    restart: unless-stopped
+    ports:
+      # Map port 8000 on the host to port 8000 in the container.
+      # You can change the host port, e.g., "8080:8000".
+      - "8000:8000"
+    volumes:
+      # Mount the Docker socket from the host into the container.
+      # This is REQUIRED for Dockey to see and manage other containers.
+      - /var/run/docker.sock:/var/run/docker.sock
+
+      # (Optional) For local development, you can mount the source code
+      # to see changes without rebuilding the image.
+      # Uvicorn's reloader will automatically restart the server.
+      # - ./main.py:/app/main.py
+      # - ./static:/app/static

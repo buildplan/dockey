@@ -1,0 +1,145 @@
+# main.py - The FastAPI backend for Dockey
+
+import docker
+import asyncio
+import json
+from fastapi import FastAPI, WebSocket, Request, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from docker.errors import DockerException
+
+# --- Basic Setup ---
+app = FastAPI()
+
+# Mount the 'static' directory to serve CSS, JS, and image files
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Use Jinja2 for server-side HTML templating
+templates = Jinja2Templates(directory="static")
+
+# Initialize the Docker client
+# This will automatically connect to the Docker socket mounted into the container
+try:
+    client = docker.from_env()
+except DockerException as e:
+    print(f"Error connecting to Docker daemon: {e}")
+    # In a real-world scenario, you might want to handle this more gracefully
+    client = None
+
+# --- Helper Functions ---
+
+def get_container_status_color(status):
+    """Returns a Tailwind CSS color class based on container status."""
+    status_map = {
+        "running": "bg-green-500",
+        "paused": "bg-yellow-500",
+        "exited": "bg-red-500",
+        "restarting": "bg-blue-500",
+    }
+    return status_map.get(status, "bg-gray-500")
+
+def format_ports(port_bindings):
+    """Formats the port bindings into a more readable string."""
+    if not port_bindings:
+        return "N/A"
+
+    formatted_ports = []
+    for container_port, host_ports in port_bindings.items():
+        if host_ports:
+            for host_port in host_ports:
+                formatted_ports.append(f"{host_port['HostIp']}:{host_port['HostPort']}->{container_port}")
+    return ", ".join(formatted_ports) if formatted_ports else "N/A"
+
+
+# --- API Endpoints & Web Routes ---
+
+@app.get("/", response_class=HTMLResponse)
+async def read_root(request: Request):
+    """Serves the main HTML page."""
+    return templates.TemplateResponse("index.html", {"request": request})
+
+@app.get("/api/containers")
+async def get_containers():
+    """API endpoint to get a list of all containers with their details."""
+    if not client:
+        return {"error": "Docker client not available."}
+
+    containers_list = []
+    try:
+        all_containers = client.containers.list(all=True)
+        for container in all_containers:
+            # Get detailed attributes for each container
+            attrs = container.attrs
+            state = attrs.get('State', {})
+            network_settings = attrs.get('NetworkSettings', {})
+
+            containers_list.append({
+                "id": container.short_id,
+                "name": container.name,
+                "image": container.image.tags[0] if container.image.tags else 'N/A',
+                "status": state.get('Status', 'unknown'),
+                "status_color": get_container_status_color(state.get('Status', 'unknown')),
+                "ports": format_ports(network_settings.get('Ports', {})),
+                "created": attrs.get('Created', '').split('.')[0] + 'Z', # Format timestamp
+            })
+    except DockerException as e:
+        return {"error": str(e)}
+
+    return sorted(containers_list, key=lambda x: x['name'])
+
+
+@app.websocket("/ws/logs/{container_id}")
+async def websocket_logs(websocket: WebSocket, container_id: str):
+    """WebSocket endpoint to stream logs from a specific container."""
+    await websocket.accept()
+    if not client:
+        await websocket.send_text("Error: Docker client not available.")
+        await websocket.close()
+        return
+
+    try:
+        container = client.containers.get(container_id)
+        # Stream logs from the container. 'follow=True' keeps the connection open.
+        # 'tail=100' gets the last 100 lines to start with.
+        logs = container.logs(stream=True, follow=True, tail=100)
+
+        for log_line in logs:
+            await websocket.send_text(log_line.decode('utf-8'))
+
+    except DockerException as e:
+        await websocket.send_text(f"Error: {e}")
+    except WebSocketDisconnect:
+        print(f"Client disconnected from log stream for {container_id}")
+    finally:
+        await websocket.close()
+
+@app.post("/api/containers/{container_id}/{action}")
+async def container_action(container_id: str, action: str):
+    """API endpoint to perform actions (start, stop, restart) on a container."""
+    if not client:
+        return {"error": "Docker client not available."}
+
+    try:
+        container = client.containers.get(container_id)
+
+        if action == "start":
+            container.start()
+            return {"status": "success", "message": f"Container {container.name} started."}
+        elif action == "stop":
+            container.stop()
+            return {"status": "success", "message": f"Container {container.name} stopped."}
+        elif action == "restart":
+            container.restart()
+            return {"status": "success", "message": f"Container {container.name} restarted."}
+        else:
+            return {"status": "error", "message": "Invalid action."}
+
+    except DockerException as e:
+        return {"status": "error", "message": str(e)}
+
+if __name__ == "__main__":
+    import uvicorn
+    # This block allows running the script directly for local development
+    # without needing the 'uvicorn' command.
+    uvicorn.run(app, host="0.0.0.0", port=8000)
