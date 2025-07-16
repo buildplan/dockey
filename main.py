@@ -1,14 +1,23 @@
 import subprocess
 import json
+import docker
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from docker.errors import DockerException
 
 # --- Basic Setup ---
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="static")
+
+# --- Initialize Docker Client ---
+try:
+    client = docker.from_env()
+except DockerException as e:
+    print(f"Error connecting to Docker daemon: {e}")
+    client = None
 
 # --- API Endpoints ---
 
@@ -32,11 +41,9 @@ async def get_monitor_data():
             check=True,  # This will raise an exception if the script returns a non-zero exit code
             timeout=30  # Add a timeout for safety
         )
-
         # Parse the JSON output from the script
         data = json.loads(result.stdout)
         return data
-
     except subprocess.CalledProcessError as e:
         # If the script fails, return a detailed error
         raise HTTPException(
@@ -56,22 +63,17 @@ async def get_monitor_data():
 @app.get("/api/v1/logs/{container_id}", response_class=PlainTextResponse)
 async def get_container_logs(container_id: str):
     """
-    Gets the last 200 lines of logs for a container. This is a simple,
-    reliable HTTP request, replacing the problematic WebSocket.
+    Gets the last 200 lines of logs for a container using the Docker SDK.
+    This is more reliable than shelling out to the CLI.
     """
-    try:
-        # Use the official docker CLI to get logs
-        result = subprocess.run(
-            ["docker", "logs", "--tail", "200", container_id],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=15
-        )
-        return result.stdout or "No log output in the last 200 lines."
+    if not client:
+        raise HTTPException(status_code=503, detail="Docker client is not available.")
 
-    except subprocess.CalledProcessError as e:
-        # Return the error from the docker command itself (e.g., container not found)
-        return e.stderr
+    try:
+        container = client.containers.get(container_id)
+        logs = container.logs(tail=200).decode('utf-8', errors='ignore')
+        return logs or "No log output in the last 200 lines."
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail=f"Container '{container_id}' not found.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
