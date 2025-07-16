@@ -62,6 +62,11 @@ load_configuration() {
 
     get_config_val() {
         if [ -f "$_CONFIG_FILE_PATH" ]; then
+            # Ensure yq is available before trying to use it
+            if ! command -v yq &> /dev/null; then
+                echo ""
+                return
+            fi
             yq e "$1 // \"\"" "$_CONFIG_FILE_PATH"
         else
             echo ""
@@ -98,7 +103,7 @@ load_configuration() {
     set_final_config "NTFY_ACCESS_TOKEN"             ".notifications.ntfy.access_token"      "$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
 
     # Load the list of default containers from the config file if no ENV var is set for it
-    if [ -z "$CONTAINER_NAMES" ] && [ -f "$_CONFIG_FILE_PATH" ]; then
+    if [ -z "$CONTAINER_NAMES" ] && [ -f "$_CONFIG_FILE_PATH" ] && command -v yq &> /dev/null; then
         mapfile -t CONTAINER_NAMES_FROM_CONFIG_FILE < <(yq e '.containers.monitor_defaults[]' "$_CONFIG_FILE_PATH" 2>/dev/null)
     fi
 }
@@ -888,8 +893,11 @@ perform_checks_for_container() {
     fi
 }
 
+# NEW FUNCTION: Run all checks and output as JSON
 run_json_output() {
-    set -e # Exit immediately if a command exits with a non-zero status.
+    # CRITICAL FIX: Exit immediately if any command fails.
+    # This will expose any hidden errors in the Docker logs.
+    set -e
 
     local containers_to_check_json=()
     if [ "$#" -gt 0 ]; then
@@ -909,7 +917,7 @@ run_json_output() {
         first_container=false
 
         local inspect_json
-        inspect_json=$(docker inspect "$container_name" 2>/dev/null)
+        inspect_json=$(docker inspect "$container_name")
         if [ -z "$inspect_json" ]; then
             continue
         fi
@@ -928,7 +936,7 @@ run_json_output() {
         # Resource Usage - only for running containers
         local cpu="0"; local mem="0"
         if [[ "$status" == "running" ]]; then
-            local stats_json; stats_json=$(docker stats --no-stream --format '{{json .}}' "$container_name" 2>/dev/null)
+            local stats_json; stats_json=$(docker stats --no-stream --format '{{json .}}' "$container_name")
             if [ -n "$stats_json" ]; then
                 cpu=$(jq -r '.CPUPerc' <<< "$stats_json" | tr -d '%')
                 mem=$(jq -r '.MemPerc' <<< "$stats_json" | tr -d '%')
@@ -965,8 +973,20 @@ run_json_output() {
     echo "$json_output"
 }
 
+
 # --- Main Execution ---
 main() {
+
+main() {
+    # CRITICAL FIX: Load configuration first, so it's available for all modes.
+    load_configuration
+
+    # Handle 'json' command for the web UI
+    if [[ "$1" == "json" ]]; then
+        shift
+        run_json_output "$@"
+        exit 0
+    fi
 
     # New: Handle 'json' command
     if [[ "$1" == "json" ]]; then
