@@ -1,5 +1,3 @@
-// app.js - Frontend JavaScript for Dockey
-
 document.addEventListener('DOMContentLoaded', () => {
 
     const containerList = document.getElementById('container-list');
@@ -78,7 +76,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Establish WebSocket connection
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        logWebSocket = new WebSocket(`${wsProtocol}//${window.location.host}/ws/logs/${containerId}`);
+        logWebSocket = new WebSocket(`${wsProtocol}//${window.location.host}/api/ws/logs/${containerId}`);
 
         logWebSocket.onopen = () => {
             logContent.innerHTML = ''; // Clear "Connecting..." message
