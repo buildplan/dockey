@@ -2,9 +2,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install dependencies for the shell script
+# Install dependencies
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends jq && \
+    apt-get install -y --no-install-recommends jq skopeo && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy the requirements file for the Python app
@@ -14,7 +14,6 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the shell script into the image and make it executable
-# script is the core of monitoring logic
 COPY container-monitor.sh /usr/local/bin/container-monitor
 RUN chmod +x /usr/local/bin/container-monitor
 
